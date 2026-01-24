@@ -1,12 +1,8 @@
 #!/bin/bash
 set -e
 
-echo "[+] Starting NGINX..."
 nginx
-
 mkdir -p /app/hls
-
-echo "[+] Starting all channels..."
 
 jq -c '.channels[]' /app/channels.json | while read ch; do
   NAME=$(echo "$ch" | jq -r '.name')
@@ -16,13 +12,13 @@ jq -c '.channels[]' /app/channels.json | while read ch; do
 
   mkdir -p /app/hls/$NAME
 
-  echo "[+] Channel: $NAME ($TYPE)"
-
   if [ "$TYPE" = "mpd" ]; then
     ffmpeg \
       -headers "User-Agent: Mozilla/5.0" \
-      -decryption_key "$KEY" \
+      -key "$KEY" \
       -i "$URL" \
+      -map 0:v:0 \
+      -map 0:a? \
       -c copy \
       -f hls \
       -hls_time 4 \
@@ -30,18 +26,7 @@ jq -c '.channels[]' /app/channels.json | while read ch; do
       -hls_flags delete_segments \
       /app/hls/$NAME/index.m3u8 &
 
-  elif [ "$TYPE" = "m3u8" ]; then
-    ffmpeg \
-      -headers "User-Agent: Mozilla/5.0" \
-      -i "$URL" \
-      -c copy \
-      -f hls \
-      -hls_time 4 \
-      -hls_list_size 10 \
-      -hls_flags delete_segments \
-      /app/hls/$NAME/index.m3u8 &
-
-  elif [ "$TYPE" = "ts" ]; then
+  elif [ "$TYPE" = "m3u8" ] || [ "$TYPE" = "ts" ]; then
     ffmpeg \
       -headers "User-Agent: Mozilla/5.0" \
       -i "$URL" \
@@ -53,8 +38,6 @@ jq -c '.channels[]' /app/channels.json | while read ch; do
       /app/hls/$NAME/index.m3u8 &
   fi
 done
-
-echo "[+] Starting Cloudflare tunnel (no domain mode)..."
 
 while true; do
   cloudflared tunnel --url http://localhost:80 --no-autoupdate
