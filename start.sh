@@ -1,14 +1,14 @@
 #!/bin/bash
+set -e
+
+echo "[+] Starting NGINX..."
+nginx
 
 mkdir -p /app/hls
 
-echo "[+] Starting NGINX"
-nginx
+echo "[+] Starting all channels..."
 
-echo "[+] Starting IPTV channels"
-
-jq -c '.[]' /app/channels.json | while read ch; do
-
+jq -c '.channels[]' /app/channels.json | while read ch; do
   NAME=$(echo "$ch" | jq -r '.name')
   TYPE=$(echo "$ch" | jq -r '.type')
   URL=$(echo "$ch" | jq -r '.url')
@@ -16,33 +16,47 @@ jq -c '.[]' /app/channels.json | while read ch; do
 
   mkdir -p /app/hls/$NAME
 
+  echo "[+] Channel: $NAME ($TYPE)"
+
   if [ "$TYPE" = "mpd" ]; then
     ffmpeg \
+      -headers "User-Agent: Mozilla/5.0" \
       -decryption_key "$KEY" \
       -i "$URL" \
       -c copy \
       -f hls \
       -hls_time 4 \
-      -hls_list_size 6 \
-      -hls_flags delete_segments+append_list \
-      -hls_segment_filename "/app/hls/$NAME/seg_%03d.ts" \
-      "/app/hls/$NAME/stream.m3u8" &
-  else
+      -hls_list_size 10 \
+      -hls_flags delete_segments \
+      /app/hls/$NAME/index.m3u8 &
+
+  elif [ "$TYPE" = "m3u8" ]; then
     ffmpeg \
-      -reconnect 1 \
-      -reconnect_streamed 1 \
-      -reconnect_delay_max 5 \
+      -headers "User-Agent: Mozilla/5.0" \
       -i "$URL" \
       -c copy \
       -f hls \
       -hls_time 4 \
-      -hls_list_size 6 \
-      -hls_flags delete_segments+append_list \
-      -hls_segment_filename "/app/hls/$NAME/seg_%03d.ts" \
-      "/app/hls/$NAME/stream.m3u8" &
-  fi
+      -hls_list_size 10 \
+      -hls_flags delete_segments \
+      /app/hls/$NAME/index.m3u8 &
 
+  elif [ "$TYPE" = "ts" ]; then
+    ffmpeg \
+      -headers "User-Agent: Mozilla/5.0" \
+      -i "$URL" \
+      -c copy \
+      -f hls \
+      -hls_time 4 \
+      -hls_list_size 10 \
+      -hls_flags delete_segments \
+      /app/hls/$NAME/index.m3u8 &
+  fi
 done
 
-echo "[+] Starting Cloudflare Named Tunnel"
-cloudflared tunnel run iptv
+echo "[+] Starting Cloudflare tunnel (no domain mode)..."
+
+while true; do
+  cloudflared tunnel --url http://localhost:80 --no-autoupdate
+  sleep 5
+done
