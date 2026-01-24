@@ -1,10 +1,16 @@
 {
   "channels": [
     {
-      "name": "dangal",
+      "name": "dangal-SD",
       "type": "mpd",
       "url": "https://jiotvpllive.cdn.jio.com/bpk-tv/Dangal_BTS/output/index.mpd",
       "key": "88295124db295a6b9f5027dc6049e294"
+    },
+    {
+      "name": "SonyMax",
+      "type": "mpd",
+      "url": "https://sundirectgo-live.pc.cdn.bitgravity.com/hd521/dth.mpd",
+      "key": "9e19eea93f0958a7b8dd1f9c704788d0:454c03e4da6c38e8e5ceca47496bc4af"
     },
     {
       "name": "news",
