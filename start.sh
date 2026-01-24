@@ -1,45 +1,65 @@
 #!/bin/bash
 set -e
 
+echo "[+] Starting NGINX..."
 nginx
-mkdir -p /app/hls
 
-jq -c '.channels[]' /app/channels.json | while read ch; do
-  NAME=$(echo "$ch" | jq -r '.name')
-  TYPE=$(echo "$ch" | jq -r '.type')
-  URL=$(echo "$ch" | jq -r '.url')
-  KEY=$(echo "$ch" | jq -r '.key // empty')
+echo "[+] Starting IPTV streams..."
 
-  mkdir -p /app/hls/$NAME
+mkdir -p /var/log
+touch /var/log/iptv.log
 
-  if [ "$TYPE" = "mpd" ]; then
+RECONNECT_FLAGS="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+
+jq -c '.[]' /app/channels.json | while read channel; do
+
+  NAME=$(echo "$channel" | jq -r '.name')
+  TYPE=$(echo "$channel" | jq -r '.type')
+  URL=$(echo "$channel" | jq -r '.url')
+  KEY=$(echo "$channel" | jq -r '.key // empty')
+
+  OUTDIR="/app/hls/$NAME"
+  mkdir -p "$OUTDIR"
+
+  echo "[+] Starting channel: $NAME"
+
+  if [[ "$TYPE" == "mpd" && -n "$KEY" ]]; then
+
+    # MPD (DRM)
     ffmpeg \
-      -headers "User-Agent: Mozilla/5.0" \
-      -key "$KEY" \
+      -loglevel warning \
+      -stats \
+      $RECONNECT_FLAGS \
+      -decryption_key "$KEY" \
       -i "$URL" \
-      -map 0:v:0 \
-      -map 0:a? \
       -c copy \
       -f hls \
       -hls_time 4 \
-      -hls_list_size 10 \
-      -hls_flags delete_segments \
-      /app/hls/$NAME/index.m3u8 &
+      -hls_list_size 6 \
+      -hls_flags delete_segments+append_list \
+      "$OUTDIR/index.m3u8" >> /var/log/iptv.log 2>&1 &
 
-  elif [ "$TYPE" = "m3u8" ] || [ "$TYPE" = "ts" ]; then
+  else
+
+    # m3u8 / ts
     ffmpeg \
-      -headers "User-Agent: Mozilla/5.0" \
+      -loglevel warning \
+      -stats \
+      $RECONNECT_FLAGS \
       -i "$URL" \
       -c copy \
       -f hls \
       -hls_time 4 \
-      -hls_list_size 10 \
-      -hls_flags delete_segments \
-      /app/hls/$NAME/index.m3u8 &
+      -hls_list_size 6 \
+      -hls_flags delete_segments+append_list \
+      "$OUTDIR/index.m3u8" >> /var/log/iptv.log 2>&1 &
+
   fi
+
 done
 
-while true; do
-  cloudflared tunnel --url http://localhost:80 --no-autoupdate
-  sleep 5
-done
+echo "[✓] All channels running"
+echo "[✓] Log file: /var/log/iptv.log"
+
+# keep container alive
+tail -f /var/log/iptv.log
