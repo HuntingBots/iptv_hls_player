@@ -1,82 +1,94 @@
 #!/bin/bash
-set -e
 
-LOG_FILE="/var/log/iptv.log"
+echo "[START] IPTV service"
 mkdir -p /app/hls
-mkdir -p /var/log
-touch $LOG_FILE
+touch /var/log/iptv.log
 
-echo "[START] IPTV service" | tee -a $LOG_FILE
+# Clear old segments on restart
+rm -rf /app/hls/*
 
-jq -c '.channels[]' /app/channels.json | while read channel; do
+jq -c '.channels[]' /app/channels.json | while read ch; do
 
-    NAME=$(echo "$channel" | jq -r '.name')
-    TYPE=$(echo "$channel" | jq -r '.type')
-    URL=$(echo "$channel" | jq -r '.url')
-    KEY=$(echo "$channel" | jq -r '.key // empty')
+    NAME=$(echo "$ch" | jq -r '.name')
+    TYPE=$(echo "$ch" | jq -r '.type')
+    URL=$(echo "$ch" | jq -r '.url')
+    KEY=$(echo "$ch" | jq -r '.key // empty')
 
-    OUT="/app/hls/$NAME"
-    mkdir -p "$OUT"
+    echo "[CHANNEL] $NAME ($TYPE)" | tee -a /var/log/iptv.log
 
-    echo "[CHANNEL] $NAME ($TYPE)" | tee -a $LOG_FILE
+    mkdir -p "/app/hls/$NAME"
 
-    if [[ "$TYPE" == "mpd" ]]; then
+    # =========================
+    # MPD (ClearKey)
+    # =========================
+    if [ "$TYPE" = "mpd" ]; then
 
         if [[ "$KEY" == *":"* ]]; then
-            echo "[MPD] ClearKey full for $NAME" | tee -a $LOG_FILE
+            echo "[MPD] ClearKey for $NAME" | tee -a /var/log/iptv.log
 
             ffmpeg \
+            -loglevel warning \
             -reconnect 1 \
             -reconnect_streamed 1 \
             -reconnect_delay_max 5 \
-            -cenc_decryption_key "$KEY" \
+            -decryption_key "$KEY" \
             -i "$URL" \
-            -map 0 \
             -c copy \
             -f hls \
             -hls_time 4 \
-            -hls_list_size 6 \
+            -hls_list_size 10 \
             -hls_flags delete_segments+append_list \
-            "$OUT/index.m3u8" \
-            >> $LOG_FILE 2>&1 &
+            "/app/hls/$NAME/index.m3u8" \
+            >> /var/log/iptv.log 2>&1 &
 
         else
-            echo "[MPD] Single key mode for $NAME" | tee -a $LOG_FILE
-
-            ffmpeg \
-            -reconnect 1 \
-            -reconnect_streamed 1 \
-            -reconnect_delay_max 5 \
-            -cenc_decryption_key "$KEY" \
-            -i "$URL" \
-            -map 0 \
-            -c copy \
-            -f hls \
-            -hls_time 4 \
-            -hls_list_size 6 \
-            -hls_flags delete_segments+append_list \
-            "$OUT/index.m3u8" \
-            >> $LOG_FILE 2>&1 &
+            echo "[ERROR] MPD key missing or invalid for $NAME" | tee -a /var/log/iptv.log
         fi
+    fi
 
-    else
-        echo "[STREAM] $NAME" | tee -a $LOG_FILE
+    # =========================
+    # M3U8
+    # =========================
+    if [ "$TYPE" = "m3u8" ]; then
+        echo "[STREAM] M3U8 $NAME" | tee -a /var/log/iptv.log
 
         ffmpeg \
+        -loglevel warning \
         -reconnect 1 \
         -reconnect_streamed 1 \
         -reconnect_delay_max 5 \
         -i "$URL" \
-        -map 0 \
         -c copy \
         -f hls \
         -hls_time 4 \
-        -hls_list_size 6 \
+        -hls_list_size 10 \
         -hls_flags delete_segments+append_list \
-        "$OUT/index.m3u8" \
-        >> $LOG_FILE 2>&1 &
+        "/app/hls/$NAME/index.m3u8" \
+        >> /var/log/iptv.log 2>&1 &
+    fi
+
+    # =========================
+    # TS / MPEGTS
+    # =========================
+    if [ "$TYPE" = "ts" ]; then
+        echo "[STREAM] TS $NAME" | tee -a /var/log/iptv.log
+
+        ffmpeg \
+        -loglevel warning \
+        -reconnect 1 \
+        -reconnect_streamed 1 \
+        -reconnect_delay_max 5 \
+        -i "$URL" \
+        -c copy \
+        -f hls \
+        -hls_time 4 \
+        -hls_list_size 10 \
+        -hls_flags delete_segments+append_list \
+        "/app/hls/$NAME/index.m3u8" \
+        >> /var/log/iptv.log 2>&1 &
     fi
 
 done
 
-tail -f /dev/null
+# keep container alive forever
+tail -f /var/log/iptv.log
