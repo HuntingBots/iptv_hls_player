@@ -1,5 +1,0 @@
-tunnel: a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxx
-credentials-file: /etc/cloudflared/tunnel.json
-
-ingress:
-  - service: http://localhost:80
