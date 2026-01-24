@@ -1,13 +1,25 @@
-#!/bin/bash
+# IPTV HLS Restreamer
 
-PLAYLIST="/app/playlist.m3u"
-BASE_URL="https://candles-however-five-trademark.trycloudflare.com"
+## Build
+docker build -t iptv .
 
-echo "#EXTM3U" > $PLAYLIST
+## Run
+docker run -d \
+--name iptv \
+--restart unless-stopped \
+-p 80:80 \
+-v $(pwd)/hls:/app/hls \
+iptv
 
-jq -c '.channels[]' /app/channels.json | while read ch; do
-  NAME=$(echo "$ch" | jq -r '.name')
+## Channel URLs
+http://SERVER_IP/hls/dangal-SD/index.m3u8
+http://SERVER_IP/hls/SonyMax/index.m3u8
+http://SERVER_IP/hls/zee-anmol/index.m3u8
+http://SERVER_IP/hls/Dangal-HD/index.m3u8
 
-  echo "#EXTINF:-1 tvg-id=\"$NAME\" tvg-name=\"$NAME\" group-title=\"Live\",$NAME" >> $PLAYLIST
-  echo "$BASE_URL/hls/$NAME/index.m3u8" >> $PLAYLIST
-done
+## Cloudflare
+https://YOUR_TUNNEL.trycloudflare.com/hls/dangal-SD/index.m3u8
+
+## Logs
+docker logs -f iptv
+cat /var/log/iptv.log
