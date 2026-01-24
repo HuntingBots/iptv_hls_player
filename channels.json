@@ -1,0 +1,18 @@
+[
+  {
+    "name": "dangal",
+    "type": "mpd",
+    "url": "https://jiotvpllive.cdn.jio.com/bpk-tv/Dangal_BTS/output/index.mpd",
+    "key": "88295124db295a6b9f5027dc6049e294"
+  },
+  {
+    "name": "news",
+    "type": "m3u8",
+    "url": "https://example.com/live.m3u8"
+  },
+  {
+    "name": "sports",
+    "type": "ts",
+    "url": "https://example.com/live.ts"
+  }
+]
