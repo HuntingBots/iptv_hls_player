@@ -1,45 +1,13 @@
-# Multi Channel IPTV Restream (iptv-hls-m3u8)
+#!/bin/bash
 
-## Features
-- MPD + ClearKey
-- M3U8
-- MPEGTS
-- Multi channel
-- Auto restart
-- Cloudflare HTTPS
-- No domain needed
-- 24/7 Docker
+PLAYLIST="/app/playlist.m3u"
+BASE_URL="https://candles-however-five-trademark.trycloudflare.com"
 
----
+echo "#EXTM3U" > $PLAYLIST
 
-## Build
+jq -c '.channels[]' /app/channels.json | while read ch; do
+  NAME=$(echo "$ch" | jq -r '.name')
 
-docker build -t iptv .
-
----
-
-## Run
-
-docker run -d \
-  --name iptv \
-  --restart unless-stopped \
-  -v $(pwd)/hls:/app/hls \
-  iptv
-
----
-
-## View logs
-
-docker logs -f iptv
-
-You will see:
-
-https://xxxx.trycloudflare.com
-
----
-
-## Stream URLs
-
-https://xxxx.trycloudflare.com/hls/dangal/index.m3u8  
-https://xxxx.trycloudflare.com/hls/news/index.m3u8  
-https://xxxx.trycloudflare.com/hls/sports/index.m3u8
+  echo "#EXTINF:-1 tvg-id=\"$NAME\" tvg-name=\"$NAME\" group-title=\"Live\",$NAME" >> $PLAYLIST
+  echo "$BASE_URL/hls/$NAME/index.m3u8" >> $PLAYLIST
+done
