@@ -4,26 +4,39 @@
       "name": "dangal-SD",
       "type": "mpd",
       "url": "https://jiotvpllive.cdn.jio.com/bpk-tv/Dangal_BTS/output/index.mpd",
-      "key": "88295124db295a6b9f5027dc6049e294:641c40230a95cb76d1949125f9552fda"
+      "key": "88295124db295a6b9f5027dc6049e294:641c40230a95cb76d1949125f9552fda",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+        "Referer": "https://jiotvpllive.cdn.jio.com/"
+      }
     },
 
     {
       "name": "SonyMax",
       "type": "mpd",
       "url": "https://sundirectgo-live.pc.cdn.bitgravity.com/hd521/dth.mpd",
-      "key": "9e19eea93f0958a7b8dd1f9c704788d0:454c03e4da6c38e8e5ceca47496bc4af"
+      "key": "9e19eea93f0958a7b8dd1f9c704788d0:454c03e4da6c38e8e5ceca47496bc4af",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"
+      }
     },
 
     {
       "name": "zee-anmol",
       "type": "m3u8",
-      "url": "http://103.78.149.54:8000/play/a00j/index.m3u8"
+      "url": "http://103.78.149.54:8000/play/a00j/index.m3u8",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"
+      }
     },
 
     {
       "name": "Dangal-HD",
       "type": "ts",
-      "url": "http://thksmom.shop/IN_Dangal/mpegts?token=edab2e9fb759f9feaf62fac0ff44ce86"
+      "url": "http://thksmom.shop/IN_Dangal/mpegts?token=edab2e9fb759f9feaf62fac0ff44ce86",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"
+      }
     }
   ]
 }
