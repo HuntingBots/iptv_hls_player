@@ -9,6 +9,7 @@ RUN apt update && apt install -y \
     wget \
     ca-certificates \
     unzip \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install a recent static ffmpeg build (includes dash decryption support)
@@ -22,7 +23,7 @@ RUN set -eux; \
     chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; \
     rm -rf /tmp/ffmpeg* /tmp/ffmpeg-tmp
 
-# Cloudflared (optional, keep previous behavior)
+# Cloudflared (optional)
 RUN wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
     && dpkg -i cloudflared-linux-amd64.deb \
     && rm cloudflared-linux-amd64.deb || true
