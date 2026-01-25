@@ -14,46 +14,60 @@ jq -c '.[]' "$CHANNELS" | while read -r ch; do
     safe=$(echo "$name" | tr ' ' '_' | tr -cd '[:alnum:]_')
     out="/app/streams/$safe"
 
-    headers=""
+    mkdir -p "$out"
+
+    # headers
+    header_args=()
     echo "$ch" | jq -r '.headers // {} | to_entries[]? | "\(.key): \(.value)"' |
     while read -r h; do
-        headers+=" --header \"$h\""
+        header_args+=("-H" "$h")
     done
 
     echo "[+] Channel: $name ($type)"
 
-    # ---- MPD ----
+    # ---------------- MPD ----------------
     if [[ "$type" == "mpd" ]]; then
 
-        cmd="N_m3u8DL-RE \"$url\" \
-            --live-real-time-merge \
-            --live-pipe-mux \
-            -o \"$out\" \
-            --no-log"
+        cmd=(
+          N_m3u8DL-RE "$url"
+          --save-dir "$out"
+          --save-name index
+          --live-real-time-merge
+          --live-pipe-mux
+          --log-level INFO
+        )
 
-        [[ -n "$key" ]] && cmd+=" --key $key"
-        [[ -n "$headers" ]] && cmd+="$headers"
+        [[ -n "$key" ]] && cmd+=(--key "$key")
 
-        eval "timeout 3600 $cmd &"
+        for h in "${header_args[@]}"; do
+            cmd+=("$h")
+        done
 
-    # ---- M3U8 ----
+        timeout 3600 "${cmd[@]}" &
+
+    # ---------------- M3U8 ----------------
     elif [[ "$type" == "m3u8" ]]; then
 
-        cmd="N_m3u8DL-RE \"$url\" \
-            --live-real-time-merge \
-            --live-pipe-mux \
-            -o \"$out\" \
-            --no-log"
+        cmd=(
+          N_m3u8DL-RE "$url"
+          --save-dir "$out"
+          --save-name index
+          --live-real-time-merge
+          --live-pipe-mux
+          --log-level INFO
+        )
 
-        [[ -n "$headers" ]] && cmd+="$headers"
+        for h in "${header_args[@]}"; do
+            cmd+=("$h")
+        done
 
-        eval "timeout 3600 $cmd &"
+        timeout 3600 "${cmd[@]}" &
 
-    # ---- TS ----
+    # ---------------- TS ----------------
     elif [[ "$type" == "ts" ]]; then
 
         ffmpeg \
-          -loglevel quiet \
+          -loglevel info \
           -headers "$(echo "$ch" | jq -r '.headers // {} | to_entries | map("\(.key): \(.value)") | join("\r\n")')" \
           -i "$url" \
           -c copy \
