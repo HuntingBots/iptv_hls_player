@@ -1,94 +1,172 @@
 #!/bin/bash
 
-echo "[START] IPTV service"
-mkdir -p /app/hls
-touch /var/log/iptv.log
+# Start script for IPTV restreamer
+# - Passes optional per-channel HTTP headers into ffmpeg
+# - Gracefully tracks ffmpeg background PIDs and kills them on exit
 
-# Clear old segments on restart
-rm -rf /app/hls/*
+set -u
 
-jq -c '.channels[]' /app/channels.json | while read ch; do
+LOGFILE="/var/log/iptv.log"
+HLS_DIR="/app/hls"
+CHANNELS="/app/channels.json"
+CLEAR_ON_START="${CLEAR_ON_START:-true}"
 
+echo "[START] IPTV service" | tee -a "$LOGFILE"
+mkdir -p "$HLS_DIR"
+touch "$LOGFILE"
+
+if [ ! -f "$CHANNELS" ]; then
+  echo "[ERROR] channels.json not found at $CHANNELS" | tee -a "$LOGFILE"
+  exit 1
+fi
+
+if [ "$CLEAR_ON_START" = "true" ] || [ "$CLEAR_ON_START" = "1" ]; then
+  echo "[INFO] Clearing old segments on start" | tee -a "$LOGFILE"
+  rm -rf "${HLS_DIR:?}/"*
+else
+  echo "[INFO] Keeping existing segments (CLEAR_ON_START=$CLEAR_ON_START)" | tee -a "$LOGFILE"
+fi
+
+# Ensure ffmpeg exists
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "[ERROR] ffmpeg not found in PATH" | tee -a "$LOGFILE"
+  exit 1
+fi
+
+# Check if ffmpeg supports -decryption_key for dash demuxer
+if ffmpeg -h demuxer=dash 2>/dev/null | grep -q decryption_key; then
+  DECRYPTION_SUPPORTED=true
+else
+  DECRYPTION_SUPPORTED=false
+  echo "[WARN] ffmpeg dash demuxer does not advertise 'decryption_key' option. MPD ClearKey decryption may not work." | tee -a "$LOGFILE"
+  echo "[WARN] Make sure the image is built with a static ffmpeg that includes dash decryption support." | tee -a "$LOGFILE"
+fi
+
+PIDS=()
+
+terminate() {
+  echo "[STOP] IPTV service shutting down" | tee -a "$LOGFILE"
+  if [ ${#PIDS[@]} -gt 0 ]; then
+    echo "[STOP] Stopping ffmpeg processes: ${PIDS[*]}" | tee -a "$LOGFILE"
+    for pid in "${PIDS[@]}"; do
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        kill "$pid" 2>/dev/null || true
+      fi
+    done
+    sleep 1
+    for pid in "${PIDS[@]}"; do
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+    done
+  fi
+  exit 0
+}
+trap terminate SIGINT SIGTERM EXIT
+
+while IFS= read -r ch; do
     NAME=$(echo "$ch" | jq -r '.name')
-    TYPE=$(echo "$ch" | jq -r '.type')
+    TYPE=$(echo "$ch" | jq -r '.type' | tr '[:upper:]' '[:lower:]')
     URL=$(echo "$ch" | jq -r '.url')
     KEY=$(echo "$ch" | jq -r '.key // empty')
+    HDR_JSON=$(echo "$ch" | jq -r '.headers // empty')
 
-    echo "[CHANNEL] $NAME ($TYPE)" | tee -a /var/log/iptv.log
+    if [ -z "$NAME" ] || [ -z "$TYPE" ] || [ -z "$URL" ]; then
+      echo "[WARN] Skipping invalid channel entry: $ch" | tee -a "$LOGFILE"
+      continue
+    fi
 
-    mkdir -p "/app/hls/$NAME"
+    echo "[CHANNEL] $NAME ($TYPE)" | tee -a "$LOGFILE"
+    mkdir -p "$HLS_DIR/$NAME"
 
-    # =========================
-    # MPD (ClearKey)
-    # =========================
-    if [ "$TYPE" = "mpd" ]; then
+    # build headers string for ffmpeg "-headers" option if provided
+    FF_HEADERS=""
+    if [ "$HDR_JSON" != "empty" ]; then
+      FF_HEADERS=$(echo "$HDR_JSON" | jq -r 'to_entries | map("\(.key): \(.value)\\r\\n") | .[]' | tr -d '\n')
+      echo "[INFO] Using custom headers for $NAME" | tee -a "$LOGFILE"
+    fi
 
-        if [[ "$KEY" == *":"* ]]; then
-            echo "[MPD] ClearKey for $NAME" | tee -a /var/log/iptv.log
+    case "$TYPE" in
+      mpd)
+        if [[ "$KEY" == *:* ]]; then
+          if [ "$DECRYPTION_SUPPORTED" = "false" ]; then
+            echo "[WARN] ffmpeg may not support -decryption_key; MPD decryption could fail for $NAME" | tee -a "$LOGFILE"
+          fi
+          echo "[MPD] ClearKey for $NAME" | tee -a "$LOGFILE"
 
+          if [ -n "$FF_HEADERS" ]; then
             ffmpeg \
-            -loglevel warning \
-            -reconnect 1 \
-            -reconnect_streamed 1 \
-            -reconnect_delay_max 5 \
-            -decryption_key "$KEY" \
-            -i "$URL" \
-            -c copy \
-            -f hls \
-            -hls_time 4 \
-            -hls_list_size 10 \
-            -hls_flags delete_segments+append_list \
-            "/app/hls/$NAME/index.m3u8" \
-            >> /var/log/iptv.log 2>&1 &
+              -loglevel warning \
+              -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+              -decryption_key "$KEY" \
+              -headers "$FF_HEADERS" \
+              -i "$URL" \
+              -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
+              "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+          else
+            ffmpeg \
+              -loglevel warning \
+              -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+              -decryption_key "$KEY" \
+              -i "$URL" \
+              -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
+              "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+          fi
 
+          PIDS+=("$!")
         else
-            echo "[ERROR] MPD key missing or invalid for $NAME" | tee -a /var/log/iptv.log
+          echo "[ERROR] MPD key missing or invalid for $NAME" | tee -a "$LOGFILE"
         fi
-    fi
+        ;;
+      m3u8)
+        echo "[STREAM] M3U8 $NAME" | tee -a "$LOGFILE"
+        if [ -n "$FF_HEADERS" ]; then
+          ffmpeg \
+            -loglevel warning \
+            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            -headers "$FF_HEADERS" \
+            -i "$URL" \
+            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
+            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+        else
+          ffmpeg \
+            -loglevel warning \
+            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            -i "$URL" \
+            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
+            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+        fi
+        PIDS+=("$!")
+        ;;
+      ts|mpegts)
+        echo "[STREAM] TS $NAME" | tee -a "$LOGFILE"
+        if [ -n "$FF_HEADERS" ]; then
+          ffmpeg \
+            -loglevel warning \
+            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            -headers "$FF_HEADERS" \
+            -i "$URL" \
+            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
+            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+        else
+          ffmpeg \
+            -loglevel warning \
+            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            -i "$URL" \
+            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
+            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+        fi
+        PIDS+=("$!")
+        ;;
+      *)
+        echo "[WARN] Unknown channel type '$TYPE' for $NAME — skipping" | tee -a "$LOGFILE"
+        ;;
+    esac
 
-    # =========================
-    # M3U8
-    # =========================
-    if [ "$TYPE" = "m3u8" ]; then
-        echo "[STREAM] M3U8 $NAME" | tee -a /var/log/iptv.log
+done < <(jq -c '.channels[]' "$CHANNELS")
 
-        ffmpeg \
-        -loglevel warning \
-        -reconnect 1 \
-        -reconnect_streamed 1 \
-        -reconnect_delay_max 5 \
-        -i "$URL" \
-        -c copy \
-        -f hls \
-        -hls_time 4 \
-        -hls_list_size 10 \
-        -hls_flags delete_segments+append_list \
-        "/app/hls/$NAME/index.m3u8" \
-        >> /var/log/iptv.log 2>&1 &
-    fi
+echo "[INFO] Spawned ${#PIDS[@]} ffmpeg workers" | tee -a "$LOGFILE"
 
-    # =========================
-    # TS / MPEGTS
-    # =========================
-    if [ "$TYPE" = "ts" ]; then
-        echo "[STREAM] TS $NAME" | tee -a /var/log/iptv.log
+tail -F "$LOGFILE" &
 
-        ffmpeg \
-        -loglevel warning \
-        -reconnect 1 \
-        -reconnect_streamed 1 \
-        -reconnect_delay_max 5 \
-        -i "$URL" \
-        -c copy \
-        -f hls \
-        -hls_time 4 \
-        -hls_list_size 10 \
-        -hls_flags delete_segments+append_list \
-        "/app/hls/$NAME/index.m3u8" \
-        >> /var/log/iptv.log 2>&1 &
-    fi
-
-done
-
-# keep container alive forever
-tail -f /var/log/iptv.log
+wait
