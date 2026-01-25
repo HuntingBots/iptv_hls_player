@@ -2,6 +2,7 @@
 
 # Start script for IPTV restreamer
 # - Passes optional per-channel HTTP headers into ffmpeg
+# - Uses larger probe/analyze settings to avoid mis-probing and reduce ffmpeg crashes
 # - Gracefully tracks ffmpeg background PIDs and kills them on exit
 
 set -u
@@ -10,6 +11,9 @@ LOGFILE="/var/log/iptv.log"
 HLS_DIR="/app/hls"
 CHANNELS="/app/channels.json"
 CLEAR_ON_START="${CLEAR_ON_START:-true}"
+
+# input probe options to improve stream detection and avoid invalid frame/codec probing
+INPUT_OPTS="-probesize 100M -analyzeduration 100M -fflags +genpts"
 
 echo "[START] IPTV service" | tee -a "$LOGFILE"
 mkdir -p "$HLS_DIR"
@@ -99,6 +103,7 @@ while IFS= read -r ch; do
               -loglevel warning \
               -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
               -decryption_key "$KEY" \
+              $INPUT_OPTS \
               -headers "$FF_HEADERS" \
               -i "$URL" \
               -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
@@ -108,6 +113,7 @@ while IFS= read -r ch; do
               -loglevel warning \
               -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
               -decryption_key "$KEY" \
+              $INPUT_OPTS \
               -i "$URL" \
               -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
               "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
@@ -124,6 +130,7 @@ while IFS= read -r ch; do
           ffmpeg \
             -loglevel warning \
             -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            $INPUT_OPTS \
             -headers "$FF_HEADERS" \
             -i "$URL" \
             -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
@@ -132,6 +139,7 @@ while IFS= read -r ch; do
           ffmpeg \
             -loglevel warning \
             -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            $INPUT_OPTS \
             -i "$URL" \
             -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
             "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
@@ -144,6 +152,7 @@ while IFS= read -r ch; do
           ffmpeg \
             -loglevel warning \
             -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            $INPUT_OPTS \
             -headers "$FF_HEADERS" \
             -i "$URL" \
             -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
@@ -152,6 +161,7 @@ while IFS= read -r ch; do
           ffmpeg \
             -loglevel warning \
             -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
+            $INPUT_OPTS \
             -i "$URL" \
             -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
             "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
