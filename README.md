@@ -1,46 +1,60 @@
 ```markdown
-# IPTV HLS Restreamer
+# IPTV HLS Restreamer (with n_m3u8dl-re worker)
 
-This image restreams configured channel sources into HLS (m3u8) files served by nginx.
+This repo runs per-channel workers to convert MPD (ClearKey) streams to HLS using either ffmpeg or n_m3u8dl-re (when configured).
 
-Highlights:
-- MPD (ClearKey) → HLS conversion using ffmpeg dash demuxer with `-decryption_key` (requires ffmpeg build with dash decryption support).
-- Direct HLS (m3u8) and TS/MPEG-TS inputs supported.
-- Per-channel HTTP header support for sources that require custom headers.
+Key points
+- MPD (ClearKey) channels: start.sh launches a per-channel worker that runs `n_m3u8dl-re` (if available) to download/decrypt the stream using the KID:KEY from channels.json. If n_m3u8dl-re produces an MP4 the worker will repackage it to HLS with ffmpeg.
+- m3u8 and ts channels: start.sh uses ffmpeg to restream them to HLS.
+- Per-channel HTTP headers are supported via the `headers` object in channels.json.
+- The image includes a static ffmpeg binary and attempts to download `n_m3u8dl-re` automatically (may fail if release assets change). If n_m3u8dl-re isn't available you can install it manually inside the container or adjust the worker.
 
-Build:
+Build
+```
 docker build -t iptv .
+```
 
-Run:
+Run
+```
 docker run -d \
   --name iptv \
   --restart unless-stopped \
   -p 80:80 \
   -v $(pwd)/hls:/app/hls \
   iptv
+```
 
-Logs:
+If host port 80 is used, run on a different host port (example 8080):
+```
+docker run -d --name iptv --restart unless-stopped -p 8080:80 -v $(pwd)/hls:/app/hls iptv
+```
+
+Logs
+```
 docker logs -f iptv
-cat /var/log/iptv.log
+docker logs --tail 200 iptv
+```
 
-Channels definition:
-Edit /app/channels.json (the container ships a sample). If you already have ClearKey keys, put them in "key" as "KID:KEY".
+Channels configuration
+- Put your channels in /app/channels.json (example included).
+- For MPD (ClearKey) channels include:
+  `"key": "KID:KEY"`
+- Optional per-channel headers:
+  `"headers": { "User-Agent": "Mozilla/5.0", "Referer": "https://..." }`
 
-Example channels.json entry:
+Example MPD channel:
+```json
 {
   "name": "dangal-SD",
   "type": "mpd",
-  "url": "https://.../index.mpd",
+  "url": "https://example.com/index.mpd",
   "key": "KID:KEY",
-  "headers": {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
-    "Referer": "https://example.com/"
-  }
+  "headers": { "User-Agent": "Mozilla/5.0", "Referer": "https://example.com/" }
 }
+```
 
-Notes:
-- Because you already have KID:KEY in channels.json, you do NOT need the pywidevine or decrypt helper scripts.
-- The Dockerfile includes a static ffmpeg build with dash demuxer that supports `-decryption_key`. If you build and still see decryption errors, verify ffmpeg supports `decryption_key`:
-  docker exec -it iptv ffmpeg -h demuxer=dash | grep decryption_key
-- If MPD URLs return 4xx/403/450 errors, add appropriate headers to the channel's "headers" object or use a proxy/tunnel.
+Notes
+- If your MPD host returns 4xx/403/450, add required headers or use a proxy/tunnel.
+- If n_m3u8dl-re isn't installed automatically, install a compatible binary and place it in /usr/local/bin inside the container.
+- Always ensure you are authorized to decrypt and restream protected content.
 ```
