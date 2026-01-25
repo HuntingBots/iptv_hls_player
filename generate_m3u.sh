@@ -1,13 +1,13 @@
 #!/bin/bash
 
-PLAYLIST="/app/playlist.m3u"
-BASE_URL="https://candles-however-five-trademark.trycloudflare.com"
+OUT="/app/output/playlist.m3u"
 
-echo "#EXTM3U" > $PLAYLIST
+echo "#EXTM3U" > "$OUT"
 
-jq -c '.channels[]' /app/channels.json | while read ch; do
-  NAME=$(echo "$ch" | jq -r '.name')
-
-  echo "#EXTINF:-1 tvg-id=\"$NAME\" tvg-name=\"$NAME\" group-title=\"Live\",$NAME" >> $PLAYLIST
-  echo "$BASE_URL/hls/$NAME/index.m3u8" >> $PLAYLIST
+for d in /app/streams/*; do
+    if [ -f "$d/index.m3u8" ]; then
+        name=$(basename "$d" | tr '_' ' ')
+        echo "#EXTINF:-1,$name" >> "$OUT"
+        echo "http://localhost/streams/$(basename "$d")/index.m3u8" >> "$OUT"
+    fi
 done
