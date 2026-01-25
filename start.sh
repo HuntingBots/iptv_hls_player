@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Start script for IPTV restreamer
-# - Passes optional per-channel HTTP headers into ffmpeg
-# - Uses larger probe/analyze settings to avoid mis-probing and reduce ffmpeg crashes
-# - Gracefully tracks ffmpeg background PIDs and kills them on exit
+# - Uses n_m3u8dl_worker.sh for MPD (ClearKey) channels (if available)
+# - Uses ffmpeg for m3u8/ts channels
+# - Supports per-channel headers and graceful shutdown
 
 set -u
 
@@ -12,7 +12,7 @@ HLS_DIR="/app/hls"
 CHANNELS="/app/channels.json"
 CLEAR_ON_START="${CLEAR_ON_START:-true}"
 
-# input probe options to improve stream detection and avoid invalid frame/codec probing
+# input probe options to improve stream detection and avoid mis-probing
 INPUT_OPTS="-probesize 100M -analyzeduration 100M -fflags +genpts"
 
 echo "[START] IPTV service" | tee -a "$LOGFILE"
@@ -37,21 +37,12 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   exit 1
 fi
 
-# Check if ffmpeg supports -decryption_key for dash demuxer
-if ffmpeg -h demuxer=dash 2>/dev/null | grep -q decryption_key; then
-  DECRYPTION_SUPPORTED=true
-else
-  DECRYPTION_SUPPORTED=false
-  echo "[WARN] ffmpeg dash demuxer does not advertise 'decryption_key' option. MPD ClearKey decryption may not work." | tee -a "$LOGFILE"
-  echo "[WARN] Make sure the image is built with a static ffmpeg that includes dash decryption support." | tee -a "$LOGFILE"
-fi
-
 PIDS=()
 
 terminate() {
   echo "[STOP] IPTV service shutting down" | tee -a "$LOGFILE"
   if [ ${#PIDS[@]} -gt 0 ]; then
-    echo "[STOP] Stopping ffmpeg processes: ${PIDS[*]}" | tee -a "$LOGFILE"
+    echo "[STOP] Stopping workers: ${PIDS[*]}" | tee -a "$LOGFILE"
     for pid in "${PIDS[@]}"; do
       if kill -0 "$pid" >/dev/null 2>&1; then
         kill "$pid" 2>/dev/null || true
@@ -83,88 +74,54 @@ while IFS= read -r ch; do
     echo "[CHANNEL] $NAME ($TYPE)" | tee -a "$LOGFILE"
     mkdir -p "$HLS_DIR/$NAME"
 
-    # build headers string for ffmpeg "-headers" option if provided
+    # build headers string presence check
     FF_HEADERS=""
     if [ "$HDR_JSON" != "empty" ]; then
-      FF_HEADERS=$(echo "$HDR_JSON" | jq -r 'to_entries | map("\(.key): \(.value)\\r\\n") | .[]' | tr -d '\n')
+      FF_HEADERS="$HDR_JSON"
       echo "[INFO] Using custom headers for $NAME" | tee -a "$LOGFILE"
     fi
 
     case "$TYPE" in
       mpd)
         if [[ "$KEY" == *:* ]]; then
-          if [ "$DECRYPTION_SUPPORTED" = "false" ]; then
-            echo "[WARN] ffmpeg may not support -decryption_key; MPD decryption could fail for $NAME" | tee -a "$LOGFILE"
-          fi
-          echo "[MPD] ClearKey for $NAME" | tee -a "$LOGFILE"
-
-          if [ -n "$FF_HEADERS" ]; then
-            ffmpeg \
-              -loglevel warning \
-              -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-              -decryption_key "$KEY" \
-              $INPUT_OPTS \
-              -headers "$FF_HEADERS" \
-              -i "$URL" \
-              -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
-              "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+          # Use nm3u8dl worker if available; else fallback to ffmpeg -decryption_key
+          if command -v n_m3u8dl-re >/dev/null 2>&1 && [ -x /app/nm3u8dl_worker.sh ]; then
+            echo "[MPD] Starting n_m3u8dl-re worker for $NAME" | tee -a "$LOGFILE"
+            /app/nm3u8dl_worker.sh "$NAME" "$URL" "$KEY" "$FF_HEADERS" >> "$LOGFILE" 2>&1 &
+            PIDS+=("$!")
           else
-            ffmpeg \
-              -loglevel warning \
-              -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-              -decryption_key "$KEY" \
-              $INPUT_OPTS \
-              -i "$URL" \
-              -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
-              "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+            echo "[MPD] n_m3u8dl-re not found — falling back to ffmpeg (requires dash decryption support)" | tee -a "$LOGFILE"
+            # Place headers before -i if provided
+            if [ "$FF_HEADERS" != "" ]; then
+              # convert JSON headers to ffmpeg -headers string
+              HDR_STR=$(echo "$FF_HEADERS" | jq -r 'to_entries | map("\(.key): \(.value)\\r\\n") | .[]' | tr -d '\n')
+              ffmpeg -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -decryption_key "$KEY" $INPUT_OPTS -headers "$HDR_STR" -i "$URL" -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list "$HLS_DIR/index.m3u8" >> "$LOGFILE" 2>&1 &
+            else
+              ffmpeg -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -decryption_key "$KEY" $INPUT_OPTS -i "$URL" -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list "$HLS_DIR/index.m3u8" >> "$LOGFILE" 2>&1 &
+            fi
+            PIDS+=("$!")
           fi
-
-          PIDS+=("$!")
         else
           echo "[ERROR] MPD key missing or invalid for $NAME" | tee -a "$LOGFILE"
         fi
         ;;
       m3u8)
         echo "[STREAM] M3U8 $NAME" | tee -a "$LOGFILE"
-        if [ -n "$FF_HEADERS" ]; then
-          ffmpeg \
-            -loglevel warning \
-            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-            $INPUT_OPTS \
-            -headers "$FF_HEADERS" \
-            -i "$URL" \
-            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
-            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+        if [ "$FF_HEADERS" != "" ]; then
+          HDR_STR=$(echo "$FF_HEADERS" | jq -r 'to_entries | map("\(.key): \(.value)\\r\\n") | .[]' | tr -d '\n')
+          ffmpeg -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 $INPUT_OPTS -headers "$HDR_STR" -i "$URL" -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list "$HLS_DIR/index.m3u8" >> "$LOGFILE" 2>&1 &
         else
-          ffmpeg \
-            -loglevel warning \
-            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-            $INPUT_OPTS \
-            -i "$URL" \
-            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
-            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+          ffmpeg -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 $INPUT_OPTS -i "$URL" -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list "$HLS_DIR/index.m3u8" >> "$LOGFILE" 2>&1 &
         fi
         PIDS+=("$!")
         ;;
       ts|mpegts)
         echo "[STREAM] TS $NAME" | tee -a "$LOGFILE"
-        if [ -n "$FF_HEADERS" ]; then
-          ffmpeg \
-            -loglevel warning \
-            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-            $INPUT_OPTS \
-            -headers "$FF_HEADERS" \
-            -i "$URL" \
-            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
-            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+        if [ "$FF_HEADERS" != "" ]; then
+          HDR_STR=$(echo "$FF_HEADERS" | jq -r 'to_entries | map("\(.key): \(.value)\\r\\n") | .[]' | tr -d '\n')
+          ffmpeg -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 $INPUT_OPTS -headers "$HDR_STR" -i "$URL" -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list "$HLS_DIR/index.m3u8" >> "$LOGFILE" 2>&1 &
         else
-          ffmpeg \
-            -loglevel warning \
-            -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 \
-            $INPUT_OPTS \
-            -i "$URL" \
-            -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list \
-            "$HLS_DIR/$NAME/index.m3u8" >> "$LOGFILE" 2>&1 &
+          ffmpeg -loglevel warning -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 $INPUT_OPTS -i "$URL" -c copy -f hls -hls_time 4 -hls_list_size 10 -hls_flags delete_segments+append_list "$HLS_DIR/index.m3u8" >> "$LOGFILE" 2>&1 &
         fi
         PIDS+=("$!")
         ;;
@@ -175,7 +132,7 @@ while IFS= read -r ch; do
 
 done < <(jq -c '.channels[]' "$CHANNELS")
 
-echo "[INFO] Spawned ${#PIDS[@]} ffmpeg workers" | tee -a "$LOGFILE"
+echo "[INFO] Spawned ${#PIDS[@]} workers" | tee -a "$LOGFILE"
 
 tail -F "$LOGFILE" &
 
