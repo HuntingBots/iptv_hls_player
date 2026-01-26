@@ -33,3 +33,4 @@ EXPOSE 80
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bash", "/app/start.sh"]
+
