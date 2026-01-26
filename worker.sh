@@ -5,60 +5,71 @@ TMP_DIR="/app/tmp"
 
 mkdir -p "$STREAM_DIR" "$TMP_DIR"
 
-start_channel() {
-
+start_clearkey() {
     NAME="$1"
-    TYPE="$2"
-    URL="$3"
-    KEY="$4"
-    HEADERS="$5"
+    URL="$2"
+    KEY="$3"
+    HEADERS_RAW="$4"
 
     OUT="$STREAM_DIR/$NAME"
     TMP="$TMP_DIR/$NAME"
 
     mkdir -p "$OUT" "$TMP"
 
-    echo "[+] Starting $NAME"
+    echo "[+] ClearKey: $NAME"
 
-    if [ "$TYPE" = "mpd-clearkey" ]; then
+    NM_HEADERS=()
+    while IFS="=" read -r k v; do
+        NM_HEADERS+=(--header "$k: $v")
+    done <<< "$HEADERS_RAW"
 
-        echo "[*] ClearKey MPD detected"
+    n_m3u8dl-re "$URL" \
+        --key "$KEY" \
+        "${NM_HEADERS[@]}" \
+        --save-dir "$TMP" \
+        --live-real-time-decryption \
+        --disable-update-check \
+        --no-log &
 
-        # Decrypt MPD continuously
-        n_m3u8dl-re "$URL" \
-          --key "$KEY" \
-          --save-dir "$TMP" \
-          --live-real-time-decryption \
-          --disable-update-check \
-          --no-log &
+    # wait for ts
+    while true; do
+        ls "$TMP"/*.ts >/dev/null 2>&1 && break
+        sleep 2
+    done
 
-        sleep 6
+    ffmpeg -re \
+        -f concat \
+        -safe 0 \
+        -i <(for f in "$TMP"/*.ts; do echo "file '$f'"; done) \
+        -c copy \
+        -f hls \
+        -hls_time 6 \
+        -hls_list_size 6 \
+        -hls_flags delete_segments+append_list \
+        "$OUT/index.m3u8" \
+        >/dev/null 2>&1 &
+}
 
-        # Convert decrypted TS → HLS
-        ffmpeg -re \
-          -stream_loop -1 \
-          -i "$TMP"/*.ts \
-          -c copy \
-          -f hls \
-          -hls_time 6 \
-          -hls_list_size 6 \
-          -hls_flags delete_segments+append_list \
-          "$OUT/index.m3u8" \
-          >/dev/null 2>&1 &
+start_direct() {
+    NAME="$1"
+    URL="$2"
+    HEADERS="$3"
 
-    else
-        # m3u8 / ts direct rebroadcast
-        ffmpeg -re \
-          -headers "$HEADERS" \
-          -i "$URL" \
-          -c copy \
-          -f hls \
-          -hls_time 6 \
-          -hls_list_size 6 \
-          -hls_flags delete_segments+append_list \
-          "$OUT/index.m3u8" \
-          >/dev/null 2>&1 &
-    fi
+    OUT="$STREAM_DIR/$NAME"
+    mkdir -p "$OUT"
+
+    echo "[+] Direct: $NAME"
+
+    ffmpeg -re \
+        -headers "$HEADERS" \
+        -i "$URL" \
+        -c copy \
+        -f hls \
+        -hls_time 6 \
+        -hls_list_size 6 \
+        -hls_flags delete_segments+append_list \
+        "$OUT/index.m3u8" \
+        >/dev/null 2>&1 &
 }
 
 while true; do
@@ -72,15 +83,18 @@ while true; do
     HEADERS=$(echo "$ch" | jq -r '
       .headers // {} |
       to_entries |
-      map("\(.key): \(.value)") |
-      join("\r\n")
+      map("\(.key)=\(.value)") |
+      join("\n")
     ')
 
-    if ! pgrep -f "$STREAM_DIR/$NAME/index.m3u8" >/dev/null; then
-        start_channel "$NAME" "$TYPE" "$URL" "$KEY" "$HEADERS"
+    if [ "$TYPE" = "mpd-clearkey" ]; then
+        pgrep -f "$TMP_DIR/$NAME" >/dev/null || \
+        start_clearkey "$NAME" "$URL" "$KEY" "$HEADERS"
+    else
+        pgrep -f "$STREAM_DIR/$NAME/index.m3u8" >/dev/null || \
+        start_direct "$NAME" "$URL" "$HEADERS"
     fi
 
   done
-
   sleep 15
 done
