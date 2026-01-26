@@ -1,6 +1,14 @@
 #!/bin/bash
 
-mkdir -p /app/streams
+echo "[+] IPTV system starting..."
 
-nginx
-bash /app/worker.sh
+mkdir -p /app/streams /app/tmp
+
+# start nginx in background
+nginx &
+
+# small delay
+sleep 2
+
+# start worker (foreground)
+exec bash /app/worker.sh
