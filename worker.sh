@@ -1,39 +1,43 @@
 #!/bin/bash
 
-mkdir -p /app/streams
+STREAM_DIR="/app/streams"
+TMP_DIR="/app/tmp"
+
+mkdir -p "$STREAM_DIR" "$TMP_DIR"
 
 start_channel() {
+
     NAME="$1"
     TYPE="$2"
     URL="$3"
     KEY="$4"
     HEADERS="$5"
 
-    OUT="/app/streams/$NAME"
-    mkdir -p "$OUT"
+    OUT="$STREAM_DIR/$NAME"
+    TMP="$TMP_DIR/$NAME"
+
+    mkdir -p "$OUT" "$TMP"
 
     echo "[+] Starting $NAME"
 
-    # build ffmpeg headers
-    FFMPEG_HEADERS=""
-    if [ -n "$HEADERS" ]; then
-        while IFS="=" read -r k v; do
-            FFMPEG_HEADERS+="$k: $v\r\n"
-        done <<< "$HEADERS"
-    fi
-
     if [ "$TYPE" = "mpd-clearkey" ]; then
 
+        echo "[*] ClearKey MPD detected"
+
+        # Decrypt MPD continuously
         n_m3u8dl-re "$URL" \
           --key "$KEY" \
-          --header "$HEADERS" \
-          --live-real-time-merge \
-          --live-pipe-mux \
-          --no-log \
-          -o - | \
+          --save-dir "$TMP" \
+          --live-real-time-decryption \
+          --disable-update-check \
+          --no-log &
+
+        sleep 6
+
+        # Convert decrypted TS → HLS
         ffmpeg -re \
-          -headers "$FFMPEG_HEADERS" \
-          -i pipe:0 \
+          -stream_loop -1 \
+          -i "$TMP"/*.ts \
           -c copy \
           -f hls \
           -hls_time 6 \
@@ -43,9 +47,9 @@ start_channel() {
           >/dev/null 2>&1 &
 
     else
-
+        # m3u8 / ts direct rebroadcast
         ffmpeg -re \
-          -headers "$FFMPEG_HEADERS" \
+          -headers "$HEADERS" \
           -i "$URL" \
           -c copy \
           -f hls \
@@ -54,7 +58,6 @@ start_channel() {
           -hls_flags delete_segments+append_list \
           "$OUT/index.m3u8" \
           >/dev/null 2>&1 &
-
     fi
 }
 
@@ -69,15 +72,15 @@ while true; do
     HEADERS=$(echo "$ch" | jq -r '
       .headers // {} |
       to_entries |
-      map("\(.key)=\(.value)") |
-      join("\n")
+      map("\(.key): \(.value)") |
+      join("\r\n")
     ')
 
-    if ! pgrep -f "/app/streams/$NAME/index.m3u8" >/dev/null; then
+    if ! pgrep -f "$STREAM_DIR/$NAME/index.m3u8" >/dev/null; then
         start_channel "$NAME" "$TYPE" "$URL" "$KEY" "$HEADERS"
     fi
 
   done
 
-  sleep 10
+  sleep 15
 done
