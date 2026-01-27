@@ -2,7 +2,7 @@
 
 echo "[+] IPTV system starting..."
 
-mkdir -p /streams /tmpstreams
+mkdir -p /streams 
 # start nginx in background
 nginx &
 
