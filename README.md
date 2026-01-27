@@ -53,6 +53,104 @@ Example MPD channel:
 }
 ```
 
+
+### ✅ FIX (2 commands only)
+
+### 1️⃣ Remove old container (force)
+
+```bash
+podman rm -f iptv
+```
+
+You should see an ID printed — that means it’s deleted.
+
+---
+
+### 2️⃣ Run container again
+
+```bash
+podman run -d \
+  --name iptv \
+  --network host \
+  --restart=always \
+  -v /home/ubuntu/iptv-streams:/streams:Z \
+  iptv
+```
+
+✅ This time it will start cleanly.
+
+---
+
+# ✅ Verify container is running
+
+```bash
+podman ps
+```
+
+You must see:
+
+```
+CONTAINER ID   IMAGE   STATUS      NAMES
+xxxxxxx        iptv    Up ...       iptv
+```
+
+---
+
+# ✅ Check logs (important)
+
+```bash
+podman logs -f iptv
+```
+
+You should see something like:
+
+```
+[+] IPTV system starting...
+[+] Starting Dangal_SD
+[+] Starting Sony_Max
+[+] Starting Zee_Anmol
+[+] Starting Dangal_HD
+```
+
+(no nginx bind errors)
+
+---
+
+# ✅ Test stream (after 30 seconds)
+
+```bash
+curl http://127.0.0.1:8080/Dangal_HD/index.m3u8
+```
+
+or browser:
+
+```
+http://YOUR_SERVER_IP:8080/Dangal_HD/index.m3u8
+```
+
+---
+
+# 🔥 Important (Oracle / Podman rule)
+
+Because you are using:
+
+```
+--network host
+```
+
+You must always use:
+
+```
+http://IP:8080/CHANNEL/index.m3u8
+```
+
+❌ not `/streams/`
+❌ not `/playlist.m3u`
+✅ direct folder name
+
+
+
+
 Notes
 - If your MPD host returns 4xx/403/450, add required headers or use a proxy/tunnel.
 - If n_m3u8dl-re isn't installed automatically, install a compatible binary and place it in /usr/local/bin inside the container.
