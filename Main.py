@@ -1,41 +1,35 @@
 import os
 import time
-
-# ================= AUTO INSTALL =================
-def auto_install():
-    print("🔄 Checking dependencies...")
-
-    try:
-        import flask
-        import requests
-    except ImportError:
-        print("📦 Installing modules...")
-        os.system("pip install flask requests")
-
-    if os.system("which ffmpeg > /dev/null 2>&1") != 0:
-        print("📦 Installing ffmpeg...")
-        os.system("pkg install ffmpeg -y")
-
-    if not os.path.exists("/storage/emulated/0"):
-        os.system("termux-setup-storage")
-
-auto_install()
-
-# ================= IMPORTS =================
 import requests
 import re
 import threading
 import subprocess
 from flask import Flask, Response
 
+# ================= AUTO INSTALL =================
+def auto_install():
+    try:
+        import flask, requests
+    except:
+        os.system("pip install flask requests")
+
+    if os.system("which ffmpeg > /dev/null 2>&1") != 0:
+        os.system("pkg install ffmpeg -y")
+
+auto_install()
+
 # ================= CONFIG =================
 PORTAL = "http://datahub11.com/portal.php"
+BASE = PORTAL.replace("/portal.php", "")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp",
-    "Referer": "http://datahub11.com/c/",
+    "Referer": f"{BASE}/c/",
+    "X-User-Agent": "Model: MAG270; Link: WiFi",
     "Accept": "*/*",
-    "Connection": "keep-alive"
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "Keep-Alive",
+    "Cache-Control": "no-cache"
 }
 
 COOKIES = {
@@ -53,7 +47,10 @@ STB_PARAMS = {
 
 # ================= APP =================
 app = Flask(__name__)
+
 session = requests.Session()
+session.headers.update(HEADERS)
+session.cookies.update(COOKIES)
 
 CHANNELS = [
     ("Dangal 2", "355278"),
@@ -67,12 +64,11 @@ CHANNELS = [
 TOKEN = None
 TOKEN_TIME = 0
 
-
 # ================= TOKEN =================
 def get_token(force=False):
     global TOKEN, TOKEN_TIME
 
-    if TOKEN and not force and (time.time() - TOKEN_TIME < 55):
+    if TOKEN and not force and (time.time() - TOKEN_TIME < 50):
         return TOKEN
 
     try:
@@ -84,7 +80,7 @@ def get_token(force=False):
             **STB_PARAMS
         }
 
-        r = session.get(PORTAL, headers=HEADERS, cookies=COOKIES, params=params, timeout=10)
+        r = session.get(PORTAL, params=params, timeout=10)
         TOKEN = r.json().get("js", {}).get("token")
         TOKEN_TIME = time.time()
 
@@ -95,24 +91,13 @@ def get_token(force=False):
         print("❌ TOKEN ERROR:", e)
         return None
 
-
-# ================= AUTO TOKEN =================
-def token_refresher():
-    while True:
-        try:
-            get_token(force=True)
-        except:
-            pass
-        time.sleep(60)
-
-
-# ================= PREP =================
+# ================= PROFILE =================
 def prepare(token):
     try:
-        headers = HEADERS.copy()
+        headers = session.headers.copy()
         headers["Authorization"] = f"Bearer {token}"
 
-        session.get(PORTAL, headers=headers, cookies=COOKIES, params={
+        session.get(PORTAL, headers=headers, params={
             "type": "stb",
             "action": "get_profile",
             "JsHttpRequest": "1-xml",
@@ -120,7 +105,6 @@ def prepare(token):
         }, timeout=10)
     except:
         pass
-
 
 # ================= STREAM =================
 def get_stream(ch_id):
@@ -131,10 +115,10 @@ def get_stream(ch_id):
 
         prepare(token)
 
-        headers = HEADERS.copy()
+        headers = session.headers.copy()
         headers["Authorization"] = f"Bearer {token}"
 
-        r = session.get(PORTAL, headers=headers, cookies=COOKIES, params={
+        r = session.get(PORTAL, headers=headers, params={
             "type": "itv",
             "action": "create_link",
             "cmd": f"ffmpeg http://localhost/ch/{ch_id}_",
@@ -143,13 +127,19 @@ def get_stream(ch_id):
 
         cmd = r.json().get("js", {}).get("cmd")
         if not cmd:
+            print("❌ No stream cmd")
             return None
 
-        return re.search(r"(http.*)", cmd).group(1)
+        url = re.search(r"(http.*)", cmd).group(1)
 
-    except:
+        # localhost fix
+        url = url.replace("http://localhost", BASE)
+
+        return url
+
+    except Exception as e:
+        print("❌ STREAM ERROR:", e)
         return None
-
 
 # ================= LIVE =================
 @app.route("/live/<ch_id>.ts")
@@ -164,43 +154,37 @@ def live(ch_id):
                 continue
 
             try:
-                cmd = [
-                    "ffmpeg",
-                    "-loglevel", "error",
-                    "-reconnect", "1",
-                    "-reconnect_streamed", "1",
-                    "-reconnect_delay_max", "2",
-                    "-fflags", "+genpts",
-                    "-i", stream,
-                    "-c", "copy",
-                    "-f", "mpegts",
-                    "-"
-                ]
+                headers = session.headers.copy()
 
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+                with requests.get(
+                    stream,
+                    headers=headers,
+                    cookies=COOKIES,
+                    stream=True,
+                    timeout=10
+                ) as r:
 
-                while True:
-                    chunk = p.stdout.read(1024 * 512)
-                    if not chunk:
-                        break
+                    if r.status_code != 200:
+                        print("❌ BLOCK:", r.status_code)
+                        time.sleep(2)
+                        continue
 
-                    yield chunk
+                    for chunk in r.iter_content(1024 * 512):
+                        if chunk:
+                            yield chunk
 
-                    # 🔥 silent refresh
-                    if time.time() - TOKEN_TIME > 55:
-                        get_token(force=True)
+                    time.sleep(1)
 
             except Exception as e:
                 print("❌ Stream error:", e)
-                time.sleep(1)
+                time.sleep(2)
 
     return Response(generate(), content_type="video/mp2t")
-
 
 # ================= PLAYLIST =================
 @app.route("/playlist.m3u")
 def playlist():
-    host = "http://127.0.0.1:8080"
+    host = "http://127.0.0.1:8090"
 
     m3u = "#EXTM3U\n"
 
@@ -210,14 +194,18 @@ def playlist():
 
     return Response(m3u, mimetype="application/x-mpegURL")
 
-
 @app.route("/")
 def home():
     return "🔥 IPTV SERVER RUNNING"
 
+# ================= AUTO TOKEN =================
+def token_refresher():
+    while True:
+        get_token(force=True)
+        time.sleep(60)
 
-# ================= START =================
 threading.Thread(target=token_refresher, daemon=True).start()
 
+# ================= START =================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8090, threaded=True)
