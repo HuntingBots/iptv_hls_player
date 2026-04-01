@@ -39,10 +39,13 @@ COOKIES = {
 }
 
 STB_PARAMS = {
+    "mac": COOKIES["mac"],
     "sn": "1234567890",
     "device_id": "ABCDEF123456",
     "device_id2": "ABCDEF123456",
-    "signature": "ABCDEF123456"
+    "signature": "ABCDEF123456",
+    "client_type": "STB",
+    "stb_type": "MAG270"
 }
 
 # ================= APP =================
@@ -141,7 +144,7 @@ def get_stream(ch_id):
         print("❌ STREAM ERROR:", e)
         return None
 
-# ================= LIVE =================
+# ================= LIVE (🔥 FIXED) =================
 @app.route("/live/<ch_id>.ts")
 def live(ch_id):
 
@@ -154,29 +157,36 @@ def live(ch_id):
                 continue
 
             try:
-                headers = session.headers.copy()
+                print(f"🎬 FFmpeg streaming {ch_id}")
 
-                with requests.get(
-                    stream,
-                    headers=headers,
-                    cookies=COOKIES,
-                    stream=True,
-                    timeout=10
-                ) as r:
+                cmd = [
+                    "ffmpeg",
+                    "-loglevel", "error",
+                    "-reconnect", "1",
+                    "-reconnect_streamed", "1",
+                    "-reconnect_delay_max", "2",
+                    "-headers",
+                    f"User-Agent: {HEADERS['User-Agent']}\r\n"
+                    f"Referer: {HEADERS['Referer']}\r\n"
+                    f"X-User-Agent: {HEADERS.get('X-User-Agent','')}\r\n",
+                    "-i", stream,
+                    "-c", "copy",
+                    "-f", "mpegts",
+                    "-"
+                ]
 
-                    if r.status_code != 200:
-                        print("❌ BLOCK:", r.status_code)
-                        time.sleep(2)
-                        continue
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
 
-                    for chunk in r.iter_content(1024 * 512):
-                        if chunk:
-                            yield chunk
+                while True:
+                    chunk = p.stdout.read(1024 * 512)
+                    if not chunk:
+                        break
+                    yield chunk
 
-                    time.sleep(1)
+                print("🔄 reconnecting...")
 
             except Exception as e:
-                print("❌ Stream error:", e)
+                print("❌ ffmpeg error:", e)
                 time.sleep(2)
 
     return Response(generate(), content_type="video/mp2t")
