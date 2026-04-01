@@ -64,13 +64,15 @@ BASE = "/storage/emulated/0/iptv"
 os.makedirs(BASE, exist_ok=True)
 
 CHANNELS = [
+    ("Dangal 2", "355278"),
+    ("Dangal", "53107"),
     ("Sony TV 4K", "98854"),
     ("Sab TV 4K", "98853"),
     ("SET HD", "9365"),
     ("Star Bharat 4K", "199"),
 ]
 
-SONY_ID = "98854"
+# SONY_ID = "98854"
 
 TOKEN = None
 TOKEN_TIME = 0
