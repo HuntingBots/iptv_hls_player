@@ -1,221 +1,203 @@
-import os
-import time
-import requests
-import re
-import threading
-import subprocess
-from flask import Flask, Response
+import  sys,json,os,schedule,re
+import argparse
+import  requests as reqs
+from time import sleep
+from datetime import datetime
+import pytz
 
-# ================= AUTO INSTALL =================
-def auto_install():
-    try:
-        import flask, requests
-    except:
-        os.system("pip install flask requests")
 
-    if os.system("which ffmpeg > /dev/null 2>&1") != 0:
-        os.system("pkg install ffmpeg -y")
+ist = pytz.timezone('Asia/Kolkata')
 
-auto_install()
+parser = argparse.ArgumentParser(description='Usage Of Stb Recorder')
+parser.add_argument("-id", help="record channel using id.")
+parser.add_argument("-retry", help="recording may interrupt set retry. Ex -retry 3")
+parser.add_argument("-search", help="search channels for its id's")
+parser.add_argument("-user", help="get user info and profile by passiing. Ex -user info or profile")
+parser.add_argument("-o", help="output file name don't use any extension at the end")
+parser.add_argument("-sch", help="shcedule recrding format 24h - like -sch 20:3 it's cosider as 20 hours and 3 minutes")
+parser.add_argument("-d1", help="device id one for auth")
+parser.add_argument("-d2", help="device id two for auth")
+parser.add_argument("-sn", help="serial number for auth")
+parser.add_argument("-mac", help="required fields")
+parser.add_argument("-url", help="required fields")
+parser.add_argument("-sign", help="signature for auth")
+parser.add_argument("-to", help="record time as hh:mm:ss. Ex: -to 00:20:00 ")
+args = parser.parse_args()
 
-# ================= CONFIG =================
-PORTAL = "http://datahub11.com/portal.php"
-BASE = PORTAL.replace("/portal.php", "")
+def stb_handler(type,action):
+    def handler(func):
+        def wrapper(self,*args):
+            header = {
+                  'User-Agent': 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+                  'X-User-Agent': 'Model: MAG250; Link: WiFi',
+                  'Referer': self.add,
+                  **self.header
+                 }
+            param = {
+                  'action': action,
+                  'type': type,
+                  'JsHttpRequest': '1-xml'
+                 }
+            if action == 'get_profile':
+               param = {**param,'sn': self.sn,
+                'device_id': self.device,
+                'device_id2': self.device2,
+                'signature': self.sign}
+                #'stb_type': 'MAG254' }
+               param = self.remove_empty_keys(param)
+            if action == 'create_link':
+               param = {**param,'cmd':f'auto http://localhost/ch/{args[1]}'}
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp",
-    "Referer": f"{BASE}/c/",
-    "X-User-Agent": "Model: MAG270; Link: WiFi",
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "Keep-Alive",
-    "Cache-Control": "no-cache"
-}
-
-COOKIES = {
-    "mac": "00:1A:79:7B:4C:50",
-    "stb_lang": "en",
-    "timezone": "Asia/Kolkata"
-}
-
-STB_PARAMS = {
-    "mac": COOKIES["mac"],
-    "sn": "1234567890",
-    "device_id": "ABCDEF123456",
-    "device_id2": "ABCDEF123456",
-    "signature": "ABCDEF123456",
-    "client_type": "STB",
-    "stb_type": "MAG270"
-}
-
-# ================= APP =================
-app = Flask(__name__)
-
-session = requests.Session()
-session.headers.update(HEADERS)
-session.cookies.update(COOKIES)
-
-CHANNELS = [
-    ("Dangal 2", "355278"),
-    ("Dangal", "53107"),
-    ("Sony TV 4K", "98854"),
-    ("Sab TV 4K", "98853"),
-    ("SET HD", "9365"),
-    ("Star Bharat 4K", "199"),
-]
-
-TOKEN = None
-TOKEN_TIME = 0
-
-# ================= TOKEN =================
-def get_token(force=False):
-    global TOKEN, TOKEN_TIME
-
-    if TOKEN and not force and (time.time() - TOKEN_TIME < 50):
-        return TOKEN
-
-    try:
-        params = {
-            "type": "stb",
-            "action": "handshake",
-            "token": "",
-            "JsHttpRequest": "1-xml",
-            **STB_PARAMS
-        }
-
-        r = session.get(PORTAL, params=params, timeout=10)
-        TOKEN = r.json().get("js", {}).get("token")
-        TOKEN_TIME = time.time()
-
-        print("✅ TOKEN UPDATED")
-        return TOKEN
-
-    except Exception as e:
-        print("❌ TOKEN ERROR:", e)
-        return None
-
-# ================= PROFILE =================
-def prepare(token):
-    try:
-        headers = session.headers.copy()
-        headers["Authorization"] = f"Bearer {token}"
-
-        session.get(PORTAL, headers=headers, params={
-            "type": "stb",
-            "action": "get_profile",
-            "JsHttpRequest": "1-xml",
-            **STB_PARAMS
-        }, timeout=10)
-    except:
-        pass
-
-# ================= STREAM =================
-def get_stream(ch_id):
-    try:
-        token = get_token()
-        if not token:
-            return None
-
-        prepare(token)
-
-        headers = session.headers.copy()
-        headers["Authorization"] = f"Bearer {token}"
-
-        r = session.get(PORTAL, headers=headers, params={
-            "type": "itv",
-            "action": "create_link",
-            "cmd": f"ffmpeg http://localhost/ch/{ch_id}_",
-            "JsHttpRequest": "1-xml"
-        }, timeout=10)
-
-        cmd = r.json().get("js", {}).get("cmd")
-        if not cmd:
-            print("❌ No stream cmd")
-            return None
-
-        url = re.search(r"(http.*)", cmd).group(1)
-
-        # localhost fix
-        url = url.replace("http://localhost", BASE)
-
-        return url
-
-    except Exception as e:
-        print("❌ STREAM ERROR:", e)
-        return None
-
-# ================= LIVE (🔥 FIXED) =================
-@app.route("/live/<ch_id>.ts")
-def live(ch_id):
-
-    def generate():
-        while True:
-            stream = get_stream(ch_id)
-
-            if not stream:
-                time.sleep(2)
-                continue
-
+            cookie = {
+                  'mac': self.mac,
+                  'stb_lang': 'en',
+                  'timezone': 'GMT'
+                 }
+            if action == 'create_link':
+                  param['cmd'] = f'auto http://localhost/ch/{args[1]}'
             try:
-                print(f"🎬 FFmpeg streaming {ch_id}")
+               resp = reqs.get(self.url,params=param,headers=header,cookies=cookie)
+               data = resp.json()
+            except:
+               print(resp.content)
+               sys.exit(1)
+            return func(self,data)
+        return wrapper
+    return handler
 
-                cmd = [
-                    "ffmpeg",
-                    "-loglevel", "error",
-                    "-reconnect", "1",
-                    "-reconnect_streamed", "1",
-                    "-reconnect_delay_max", "2",
-                    "-headers",
-                    f"User-Agent: {HEADERS['User-Agent']}\r\n"
-                    f"Referer: {HEADERS['Referer']}\r\n"
-                    f"X-User-Agent: {HEADERS.get('X-User-Agent','')}\r\n",
-                    "-i", stream,
-                    "-c", "copy",
-                    "-f", "mpegts",
-                    "-"
-                ]
+class stb:
 
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+   def __init__(self,url,mac,sn=None,device=None,device2=None,sign=None):
+      self.add = url
+      self.url = f'{url.split('/c')[0]}/server/load.php'
+      self.mac = mac
+      self.sn = sn
+      self.device = device
+      self.device2 = device2
+      self.sign = sign
+      self.header = {}
 
-                while True:
-                    chunk = p.stdout.read(1024 * 512)
-                    if not chunk:
-                        break
-                    yield chunk
 
-                print("🔄 reconnecting...")
+   @stb_handler(type='stb',action='handshake')
+   def token(self,data=None):
+       data = data['js']['token']
+       self.header['Authorization'] = f'Bearer {data}'
+       return data
 
-            except Exception as e:
-                print("❌ ffmpeg error:", e)
-                time.sleep(2)
+   @stb_handler(type='stb',action='get_profile')
+   def profile(self,data=None):
+       return data
 
-    return Response(generate(), content_type="video/mp2t")
+   @stb_handler(type='itv',action='get_all_channels')
+   def channels(self,data=None):
+       return data['js']['data']
 
-# ================= PLAYLIST =================
-@app.route("/playlist.m3u")
-def playlist():
-    host = "http://127.0.0.1:8090"
+   @stb_handler(type='itv',action='create_link')
+   def playurl(self,data=None,id=None):
+       data = data['js']['cmd']
+       link = re.search(r'https?://\S+',data)
+       if link:
+          return link.group(0)
+       print("link not found")
+       exit()
 
-    m3u = "#EXTM3U\n"
+   @stb_handler(type='account_info',action='get_main_info')
+   def info(self,data=None):
+       return data
 
-    for name, ch_id in CHANNELS:
-        m3u += f'#EXTINF:-1 group-title="LIVE",{name}\n'
-        m3u += f'{host}/live/{ch_id}.ts\n'
+   def remove_empty_keys(self,d):
+    return {k: v for k, v in d.items() if v is not None}
 
-    return Response(m3u, mimetype="application/x-mpegURL")
+   def search(self,query):
+       result = {}
+       data = self.channels()
+       for i in data:
+           if query.lower() in i['name'].lower():
+              result[i['cmds'][0]['id']] = i['name']
+       return result
 
-@app.route("/")
-def home():
-    return "🔥 IPTV SERVER RUNNING"
+def rename(filename):
+          CWD = os.getcwd()
+          a = []
+          for i in os.listdir(CWD):
+                if i.startswith(filename) and i.endswith('ts'):
+                   a.append(i)
+          l = len(a)
+          checker = os.path.isfile("%s/%s-%s.%s" % (CWD,filename,l,'ts'))
+          if checker == True:
+                  l = l+1
+          return f'{filename}-{l}.ts'
 
-# ================= AUTO TOKEN =================
-def token_refresher():
-    while True:
-        get_token(force=True)
-        time.sleep(60)
 
-threading.Thread(target=token_refresher, daemon=True).start()
+def download(tv):
+    retry = 1
+    if args.retry:
+       retry = int(args.retry)
+    for _ in range(retry):
+       tv.profile()
+       print("Recording Started:", datetime.now(ist).strftime('%Y-%m-%d %H:%M:%S'))
+       ch = args.id
+       dl = tv.playurl('_',ch)
+       cmd = ['ffmpeg','-i']
+       cmd.append(dl)
+       if args.to:
+          cmd.append('-to')
+          cmd.append(args.to)
+       cmd.append('-c copy')
+       cmd.append('-map 0:v:0')
+       cmd.append('-map 0:a')
+       if args.o:
+          cmd.append(rename(args.o))
+       else:
+          o = rename('tvdl')
+          cmd.append(o)
+       os.system(f'{" ".join(cmd)}') 
+    return
 
-# ================= START =================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8090, threaded=True)
+def main():
+    if args.url and args.mac or args.sn and args.d1 or args.d2 or args.sign:
+       url = args.url
+       mac = args.mac
+       sn  = args.sn
+       d1  = args.d1
+       d2  = args.d2
+       sig = args.sign
+
+       tv = stb(url,mac,sn,d1,d2,sig)
+       tv.token()
+       tv.profile()
+       if args.id and not args.sch:
+          download(tv)
+          return
+       if args.search:
+           s = tv.search(args.search)
+           print("  ID      |       Name  ")
+           for k,v in s.items():
+               print(f"{k}         {v}")
+           return
+       if args.user:
+          if args.user == "info":
+             info = tv.info()
+             print(info)
+          if args.user == "profile":
+             profile = tv.profile()
+             print(profile)
+          return
+       if args.sch and args.id:
+          hour,minute = [ int(i) for i in args.sch.split(':') ]
+          schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(lambda: download(tv))
+          print(f"scheduled {hour:02d}:{minute:02d} IST.")
+          try:
+             while True:
+                schedule.run_pending()
+                sleep(1)
+          except KeyboardInterrupt:
+             print("Scheduler stopped.")
+       else:
+          print('Note: to schedule requires channel id get by searching channel')
+       return
+    print("Provide Required fields.") 
+    return
+
+if __name__ == '__main__':
+   main()
